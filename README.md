@@ -51,8 +51,8 @@ This guide covers the following topics:
 
 ### 📚 Special Topics
 
-- **[Network Debugging Guide (Linux)](network_linux.md)** - Linux/Embedded network debugging commands and troubleshooting
-- **[Network Debugging Guide (Windows)](network_win.md)** - Windows network debugging commands and troubleshooting
+- **[LAN Debugging Guide (Linux)](network_linux.md)** - Embedded Linux industrial device LAN debugging, IP configuration, and connection troubleshooting
+- **[LAN Debugging Guide (Windows)](network_win.md)** - Windows industrial device LAN debugging, IP configuration, and connection troubleshooting
 
 ## Quick Start
 
@@ -96,6 +96,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-<p align="center">
-  <b>Alumy</b> - Making Embedded Development Easier
-</p>
+**Alumy** - Making Embedded Development Easier

@@ -51,8 +51,8 @@
 
 ### 📚 专题文档
 
-- **[网络调试指南 (Linux)](network_linux_zh.md)** - Linux/嵌入式系统网络调试命令与故障排查
-- **[网络调试指南 (Windows)](network_win_zh.md)** - Windows 系统网络调试命令与故障排查
+- **[局域网调试指南 (Linux)](network_linux_zh.md)** - 嵌入式 Linux 系统工控设备局域网调试、IP 配置与连接故障排查
+- **[局域网调试指南 (Windows)](network_win_zh.md)** - Windows 系统工控设备局域网调试、IP 配置与连接故障排查
 
 ## 快速开始
 
@@ -96,6 +96,4 @@
 
 ---
 
-<p align="center">
-  <b>Alumy</b> - 让嵌入式开发更简单
-</p>
+**Alumy** - 让嵌入式开发更简单

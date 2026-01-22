@@ -1,41 +1,39 @@
-# Windows 网络调试指南
+# Windows 局域网调试指南（工控设备）
 
 [![English](https://img.shields.io/badge/Docs-English-blue.svg)](network_win.md)
 
-本文档专门介绍 Windows 系统中的网络调试命令和故障排查方法。
+本文档专门针对工控设备的局域网调试，介绍 Windows 系统中常用的网络诊断命令和故障排查方法。
 
 ## 📋 目录
 
-- [网络连通性测试](#网络连通性测试)
-- [网络配置查看与管理](#网络配置查看与管理)
-- [路由诊断](#路由诊断)
-- [DNS 诊断](#dns-诊断)
-- [端口与连接管理](#端口与连接管理)
-- [高级网络配置 (netsh)](#高级网络配置-netsh)
-- [Windows 防火墙](#windows-防火墙)
-- [PowerShell 网络命令](#powershell-网络命令)
-- [网络抓包工具](#网络抓包工具)
-- [网络故障排查流程](#网络故障排查流程)
+- [局域网连通性测试](#局域网连通性测试)
+- [IP 配置与管理](#ip-配置与管理)
+- [设备发现与 ARP](#设备发现与-arp)
+- [端口连通性测试](#端口连通性测试)
+- [局域网故障排查](#局域网故障排查)
+- [静态 IP 配置 (netsh)](#静态-ip-配置-netsh)
+- [防火墙快速配置](#防火墙快速配置)
+- [网络抓包分析](#网络抓包分析)
 
 ---
 
-## 网络连通性测试
+## 局域网连通性测试
 
-### ping
+### ping - 测试设备连通性
 
-Windows 下的 `ping` 命令用于测试网络连通性。
+测试 PC 与工控设备之间的网络连通性，是故障排查的第一步。
 
 #### 基本用法
 
 ```cmd
-# 基本 ping 测试（默认发送 4 个包）
-ping 192.168.1.1
+# 测试工控设备连通性（默认发送 4 个包）
+ping 192.168.1.100
+
+# 持续监控设备在线状态（按 Ctrl+C 停止）
+ping -t 192.168.1.100
 
 # 指定发送次数
-ping -n 10 192.168.1.1
-
-# 持续 ping（按 Ctrl+C 停止）
-ping -t 192.168.1.1
+ping -n 10 192.168.1.100
 
 # 指定数据包大小（字节）
 ping -l 1000 192.168.1.1
@@ -81,13 +79,35 @@ ping -6 fe80::1
 | `目标主机无法访问` | 本地网络配置问题 | 检查 IP 配置 |
 | `目标端口无法访问` | 端口不通 | 检查防火墙规则 |
 
+#### 工控设备调试场景
+
+```cmd
+# 场景1：检查设备是否在线
+ping -n 1 192.168.1.100
+# 返回成功 → 设备在线
+# 返回超时 → 检查网线、IP配置、设备电源
+
+# 场景2：测试网络稳定性（检查丢包）
+ping -t -l 1000 192.168.1.100
+# 观察是否有丢包或延迟波动
+
+# 场景3：批量检查多个设备
+for /L %i in (1,1,254) do @ping -n 1 -w 100 192.168.1.%i | find "回复" && echo 192.168.1.%i 在线
+
+# 场景4：检查是否存在 IP 冲突
+# 先 ping 目标 IP，然后检查 ARP 表
+ping 192.168.1.100
+arp -a | findstr "192.168.1.100"
+# 如果 MAC 地址与预期不符，可能存在 IP 冲突
+```
+
 ---
 
-## 网络配置查看与管理
+## IP 配置与管理
 
-### ipconfig
+### ipconfig - 查看和管理 IP 配置
 
-`ipconfig` 是 Windows 查看和管理 IP 配置的主要命令。
+工控设备通常使用静态 IP 地址，需要确保 PC 与设备在同一网段。
 
 #### 基本用法
 
@@ -135,242 +155,160 @@ ipconfig | findstr "以太网"
    默认网关. . . . . . . . . . . . . : 192.168.1.1
 ```
 
-#### 快速诊断技巧
+#### 工控设备调试场景
 
 ```cmd
-# 检查 IP 配置是否正常
-ipconfig | findstr /C:"IPv4" /C:"子网掩码" /C:"默认网关"
+# 场景1：检查 PC 的 IP 配置
+ipconfig
+# 确认 IPv4 地址、子网掩码与设备在同一网段
+# 示例：PC: 192.168.1.10/255.255.255.0
+#       设备: 192.168.1.100/255.255.255.0
 
-# 检查 DNS 服务器
-ipconfig /all | findstr /C:"DNS 服务器"
+# 场景2：快速查看当前网卡 IP
+ipconfig | findstr /C:"IPv4" /C:"子网掩码"
 
-# 查看 MAC 地址
+# 场景3：查看网卡 MAC 地址（用于设备白名单）
 ipconfig /all | findstr /C:"物理地址"
 
-# 重置网络配置（释放并重新获取）
-ipconfig /release && ipconfig /renew && ipconfig /flushdns
+# 场景4：检查是否有多个网卡（避免网关冲突）
+ipconfig | findstr /C:"适配器" /C:"IPv4"
+
+# 场景5：网段不匹配时的判断
+# PC: 192.168.1.10，设备: 192.168.0.100
+# 两者不在同一网段，需要修改其中一个的 IP 配置
 ```
 
-### getmac
-
-查看网络适配器的 MAC 地址。
+#### IP 网段计算
 
 ```cmd
-# 查看所有 MAC 地址
-getmac
+# 常用网段配置：
+# 配置1: IP: 192.168.1.X, 掩码: 255.255.255.0 (可用: 192.168.1.1-254)
+# 配置2: IP: 192.168.0.X, 掩码: 255.255.255.0 (可用: 192.168.0.1-254)
+# 配置3: IP: 10.0.0.X, 掩码: 255.255.255.0 (可用: 10.0.0.1-254)
 
-# 详细格式
-getmac /v
-
-# 查看远程计算机的 MAC（需要管理员权限）
-getmac /s 远程主机名
-
-# 查看特定格式
-getmac /fo table
-getmac /fo list
-getmac /fo csv
+# 判断是否同网段：
+# IP 地址与子网掩码进行 AND 运算，结果相同则在同一网段
+# 示例：
+#   PC:   192.168.1.10  & 255.255.255.0 = 192.168.1.0
+#   设备: 192.168.1.100 & 255.255.255.0 = 192.168.1.0  ✓ 同网段
+#   设备: 192.168.2.100 & 255.255.255.0 = 192.168.2.0  ✗ 不同网段
 ```
 
 ---
 
-## 路由诊断
+## 设备发现与 ARP
 
-### tracert
+### arp - 查看局域网设备
 
-跟踪数据包到达目标的路由路径。
-
-#### 基本用法
-
-```cmd
-# 基本路由跟踪
-tracert www.baidu.com
-
-# 不解析 IP 地址（加快速度）
-tracert -d 8.8.8.8
-
-# 指定最大跳数
-tracert -h 20 8.8.8.8
-
-# 指定超时时间（毫秒）
-tracert -w 2000 8.8.8.8
-
-# IPv6 路由跟踪
-tracert -6 ipv6.google.com
-```
-
-#### 输出解读
-
-```
-通过最多 30 个跃点跟踪到 www.baidu.com [220.181.38.150] 的路由:
-
-  1    <1 毫秒   <1 毫秒   <1 毫秒  192.168.1.1
-  2     2 毫秒    2 毫秒    2 毫秒  10.0.0.1
-  3     *        *        *     请求超时。
-  4    15 毫秒   15 毫秒   15 毫秒  220.181.38.150
-
-跟踪完成。
-```
-
-| 符号/信息 | 含义 |
-|----------|------|
-| `*` | 该跳无响应（超时） |
-| `请求超时` | 路由器未响应探测包 |
-| 三个时间值 | 三次探测的往返时间 |
-
-### pathping
-
-结合 `ping` 和 `tracert`，提供更详细的路由质量分析。
-
-```cmd
-# 基本用法
-pathping www.baidu.com
-
-# 不解析 IP 地址
-pathping -n 8.8.8.8
-
-# 指定最大跳数
-pathping -h 20 8.8.8.8
-
-# 指定查询次数（默认 100）
-pathping -q 50 8.8.8.8
-
-# 指定查询间隔（毫秒，默认 250）
-pathping -p 500 8.8.8.8
-```
-
-#### 输出解读
-
-```
-正在通过最多 30 个跃点跟踪到 www.baidu.com [220.181.38.150] 的路由:
-  0  DESKTOP-PC [192.168.1.100]
-  1  192.168.1.1
-  2  10.0.0.1
-  3  220.181.38.150
-
-正在计算统计信息(需要 125 秒)...
-            源到此处   此节点/链接
-跃点  RTT    丢失/发送 = Pct  丢失/发送 = Pct  地址
-  0                                           DESKTOP-PC [192.168.1.100]
-                                0/ 100 =  0%   |
-  1    0ms     0/ 100 =  0%     0/ 100 =  0%  192.168.1.1
-                                0/ 100 =  0%   |
-  2    5ms     0/ 100 =  0%     0/ 100 =  0%  10.0.0.1
-                                2/ 100 =  2%   |
-  3   20ms     2/ 100 =  2%     0/ 100 =  0%  220.181.38.150
-```
-
-### route
-
-查看和管理路由表。
-
-```cmd
-# 查看路由表
-route print
-
-# 查看 IPv4 路由表
-route print -4
-
-# 查看 IPv6 路由表
-route print -6
-
-# 添加静态路由
-route add 10.0.0.0 mask 255.0.0.0 192.168.1.1
-
-# 删除路由
-route delete 10.0.0.0
-
-# 添加永久路由（重启后保留）
-route -p add 10.0.0.0 mask 255.0.0.0 192.168.1.1
-
-# 修改路由
-route change 10.0.0.0 mask 255.0.0.0 192.168.1.2
-
-# 指定跃点数（metric）
-route add 10.0.0.0 mask 255.0.0.0 192.168.1.1 metric 10
-```
-
----
-
-## DNS 诊断
-
-### nslookup
-
-DNS 查询工具。
+ARP（地址解析协议）缓存记录了 IP 地址与 MAC 地址的对应关系，用于发现局域网内的设备。
 
 #### 基本用法
 
 ```cmd
-# 基本域名解析
-nslookup www.baidu.com
+# 查看 ARP 缓存表（局域网内所有通信过的设备）
+arp -a
 
-# 指定 DNS 服务器
-nslookup www.baidu.com 8.8.8.8
+# 查看特定 IP 的 ARP 条目
+arp -a 192.168.1.100
 
-# 查询特定记录类型
-nslookup -type=A www.baidu.com
-nslookup -type=MX baidu.com
-nslookup -type=NS baidu.com
-nslookup -type=CNAME www.baidu.com
-nslookup -type=TXT baidu.com
+# 查看特定网段的设备
+arp -a | findstr "192.168.1"
 
-# 反向 DNS 查询
-nslookup 8.8.8.8
+# 删除 ARP 缓存（排查 IP 冲突）
+arp -d 192.168.1.100
 
-# 交互模式
-nslookup
-> set type=MX
-> baidu.com
-> exit
+# 删除所有 ARP 缓存
+arp -d *
+
+# 添加静态 ARP 条目（防止 ARP 欺骗）
+arp -s 192.168.1.100 AA-BB-CC-DD-EE-FF
 ```
 
-#### 输出解读
+#### ARP 表输出解读
 
 ```
-服务器:  dns.google
-Address:  8.8.8.8
-
-非权威应答:
-名称:    www.baidu.com
-Addresses:  220.181.38.150
-          220.181.38.149
+接口: 192.168.1.10 --- 0x2
+  Internet 地址     物理地址              类型
+  192.168.1.1       11-22-33-44-55-66     动态
+  192.168.1.100     AA-BB-CC-DD-EE-FF     动态
+  192.168.1.255     ff-ff-ff-ff-ff-ff     静态
 ```
 
 | 字段 | 含义 |
 |------|------|
-| `服务器` | 使用的 DNS 服务器 |
-| `非权威应答` | 来自缓存而非权威服务器 |
-| `名称` | 域名 |
-| `Addresses` | 解析的 IP 地址 |
+| `Internet 地址` | 设备的 IP 地址 |
+| `物理地址` | 设备的 MAC 地址 |
+| `类型` | 动态（自动学习）或静态（手动添加）|
 
-### 常见 DNS 问题排查
+#### 工控设备发现场景
 
 ```cmd
-# 1. 检查 DNS 服务器配置
-ipconfig /all | findstr /C:"DNS 服务器"
+# 场景1：发现局域网内的所有设备
+# 先批量 ping，激活 ARP 缓存
+for /L %i in (1,1,254) do @ping -n 1 -w 100 192.168.1.%i >nul
+# 然后查看 ARP 表
+arp -a
 
-# 2. 清除 DNS 缓存
-ipconfig /flushdns
+# 场景2：确认设备 MAC 地址（防止 IP 冲突）
+ping 192.168.1.100
+arp -a 192.168.1.100
+# 对比设备标签上的 MAC 地址是否一致
 
-# 3. 测试不同 DNS 服务器
-nslookup www.baidu.com 8.8.8.8
-nslookup www.baidu.com 114.114.114.114
-nslookup www.baidu.com 223.5.5.5
+# 场景3：检测 IP 冲突
+# 如果 ping 通，但 ARP 显示的 MAC 地址与预期不符
+# 说明该 IP 已被其他设备占用
+arp -a | findstr "192.168.1.100"
 
-# 4. 检查 hosts 文件
-notepad C:\Windows\System32\drivers\etc\hosts
+# 场景4：清除错误的 ARP 缓存
+# 当设备更换 IP 后，旧的 ARP 缓存可能导致通信失败
+arp -d *
+ping 192.168.1.100
 
-# 5. 检查 DNS 客户端服务
-sc query Dnscache
-net start Dnscache
+# 场景5：导出 ARP 表（记录设备清单）
+arp -a > device_list.txt
+```
+
+### getmac - 查看本机 MAC 地址
+
+```cmd
+# 查看本机所有网卡 MAC 地址
+getmac
+
+# 详细格式（包含网卡名称）
+getmac /v
+
+# 表格格式输出
+getmac /fo table
+```
+
+### 设备发现工具命令
+
+```cmd
+# 方法1：批量 ping + ARP（最常用）
+@echo off
+echo 正在扫描 192.168.1.0/24 网段...
+for /L %%i in (1,1,254) do (
+    ping -n 1 -w 100 192.168.1.%%i >nul 2>&1
+    if not errorlevel 1 echo 192.168.1.%%i 在线
+)
+echo.
+echo ARP 缓存表：
+arp -a
+
+# 方法2：使用 netstat 查看当前连接的设备
+netstat -an | findstr "ESTABLISHED"
+
+# 方法3：查看网络邻居（仅局域网）
+net view
 ```
 
 ---
 
-## 端口与连接管理
+## 端口连通性测试
 
-### netstat
+### netstat - 查看网络连接和端口
 
-查看网络连接、路由表、接口统计等信息。
+用于检查工控设备的通信端口和连接状态。
 
 #### 基本用法
 
@@ -402,12 +340,14 @@ netstat -r
 # 显示每个协议的统计
 netstat -s
 
-# 每隔 N 秒刷新一次
-netstat -an 5
+# 查看特定端口（工控设备常用）
+netstat -ano | findstr :502     # Modbus TCP
+netstat -ano | findstr :44818   # EtherNet/IP
+netstat -ano | findstr :2404    # IEC 61850
+netstat -ano | findstr :102     # S7 协议
 
-# 查看特定端口
-netstat -ano | findstr :80
-netstat -ano | findstr :3389
+# 查看与特定设备的连接
+netstat -an | findstr "192.168.1.100"
 
 # 查看特定进程的连接
 netstat -ano | findstr 1234
@@ -430,149 +370,184 @@ TCP   192.168.1.100:1234  8.8.8.8:443   ESTABLISHED   5678
 | `SYN_SENT` | 发送连接请求 |
 | `SYN_RECEIVED` | 接收连接请求 |
 
-#### 实用示例
+#### 工控设备调试场景
 
 ```cmd
-# 查找占用特定端口的进程
-netstat -ano | findstr :80
-tasklist | findstr "1234"
+# 场景1：检查设备连接状态
+netstat -an | findstr "192.168.1.100"
+# 查看与设备的连接是否建立（ESTABLISHED）
 
-# 杀掉占用端口的进程
+# 场景2：检查工控协议端口是否监听
+netstat -an | findstr ":502"      # Modbus TCP
+netstat -an | findstr ":44818"    # EtherNet/IP
+netstat -an | findstr ":102"      # S7 协议
+
+# 场景3：查找占用端口的程序
+netstat -ano | findstr :502
+# 记下最后一列的 PID，然后查看进程
+tasklist | findstr "PID号"
+
+# 场景4：结束占用端口的进程
 taskkill /F /PID 1234
 
-# 查看建立的连接数
-netstat -an | find /c "ESTABLISHED"
+# 场景5：检查所有已建立的连接
+netstat -an | findstr "ESTABLISHED"
 
-# 查看监听的端口
-netstat -an | find "LISTENING"
-
-# 查看所有外部连接
-netstat -an | find "ESTABLISHED" | find /v "127.0.0.1"
+# 场景6：导出当前连接状态
+netstat -ano > connections.txt
 ```
 
-### telnet
+#### 常用工控协议端口参考
 
-测试端口连通性（需要启用 Telnet 客户端）。
+| 协议 | 端口 | 说明 |
+|------|------|------|
+| Modbus TCP | 502 | Modbus TCP 协议 |
+| EtherNet/IP | 44818 | 罗克韦尔自动化 |
+| PROFINET | 34962/34963/34964 | 西门子工业以太网 |
+| S7 | 102 | 西门子 S7 协议 |
+| OPC UA | 4840 | OPC 统一架构 |
+| IEC 61850 | 102 | 变电站自动化 |
+| BACnet/IP | 47808 | 楼宇自控 |
+| Fins | 9600 | 欧姆龙协议 |
+```
+
+### telnet - 测试设备端口
+
+测试工控设备的端口连通性（需要启用 Telnet 客户端）。
+
+#### 启用 Telnet
 
 ```cmd
-# 启用 Telnet 客户端（需要管理员权限）
+# 方法1：使用 DISM（需要管理员权限）
 dism /online /Enable-Feature /FeatureName:TelnetClient
 
-# 测试端口
-telnet 192.168.1.1 80
-telnet www.baidu.com 443
-
-# 测试成功会显示空白屏幕或连接信息
-# 测试失败会显示"无法打开到主机的连接"
+# 方法2：通过控制面板
+# 控制面板 → 程序 → 启用或关闭 Windows 功能 → 勾选 Telnet 客户端
 ```
 
-### Test-NetConnection (PowerShell)
+#### 测试设备端口
 
-```powershell
-# 测试连接（类似 ping）
-Test-NetConnection 192.168.1.1
+```cmd
+# 测试 Modbus TCP 端口（502）
+telnet 192.168.1.100 502
 
-# 测试特定端口
-Test-NetConnection 192.168.1.1 -Port 80
+# 测试 EtherNet/IP 端口（44818）
+telnet 192.168.1.100 44818
 
-# 显示详细信息
-Test-NetConnection www.baidu.com -Port 443 -InformationLevel Detailed
+# 测试 S7 协议端口（102）
+telnet 192.168.1.100 102
 
-# 路由跟踪
-Test-NetConnection www.baidu.com -TraceRoute
+# 测试 OPC UA 端口（4840）
+telnet 192.168.1.100 4840
+
+# 连接成功：显示空白屏幕或连接信息（端口开放）
+# 连接失败：显示"无法打开到主机的连接"（端口关闭或被防火墙阻止）
+
+# 退出 telnet：按 Ctrl+]，然后输入 quit
+```
+
+#### 工控设备端口测试场景
+
+```cmd
+# 场景1：测试设备是否开启 Modbus 服务
+telnet 192.168.1.100 502
+# 成功 → Modbus 服务正常
+# 失败 → 检查设备配置、防火墙
+
+# 场景2：批量测试常用工控端口
+@echo off
+echo 测试设备: 192.168.1.100
+echo.
+for %%p in (502 102 4840 44818) do (
+    echo 测试端口 %%p...
+    telnet 192.168.1.100 %%p 2>nul
+    if errorlevel 1 (
+        echo 端口 %%p: 关闭
+    ) else (
+        echo 端口 %%p: 开放
+    )
+)
 ```
 
 ---
 
-## 高级网络配置 (netsh)
+## 静态 IP 配置 (netsh)
 
-`netsh` 是 Windows 强大的网络配置命令行工具。
+工控设备通常使用静态 IP，需要配置 PC 网卡与设备在同一网段。
 
-### 网络接口配置
+### 查看网络接口
 
 ```cmd
-# 查看所有网络接口
+# 查看所有网络接口名称
 netsh interface show interface
 
-# 查看 IP 配置
+# 查看当前 IP 配置
 netsh interface ip show config
 
-# 设置静态 IP
-netsh interface ip set address name="以太网" static 192.168.1.100 255.255.255.0 192.168.1.1
+# 示例输出：
+# "以太网" 的配置
+#    DHCP 已启用:                          否
+#    IP 地址:                              192.168.1.10
+#    子网前缀:                             192.168.1.0/24 (掩码 255.255.255.0)
+#    默认网关:                             192.168.1.1
+```
 
-# 设置 DHCP
+### 配置静态 IP（与工控设备通信）
+
+```cmd
+# 场景1：配置静态 IP 与设备通信
+# 假设设备 IP: 192.168.1.100，需要配置 PC 为同网段
+netsh interface ip set address name="以太网" static 192.168.1.10 255.255.255.0 192.168.1.1
+
+# 参数说明：
+# - name="以太网"：网卡名称（通过 ipconfig 查看）
+# - static：静态 IP 模式
+# - 192.168.1.10：PC 的 IP 地址
+# - 255.255.255.0：子网掩码
+# - 192.168.1.1：默认网关（可选，局域网内可省略）
+
+# 场景2：无网关的局域网配置（直连设备）
+netsh interface ip set address name="以太网" static 192.168.1.10 255.255.255.0
+
+# 场景3：恢复 DHCP 自动获取 IP
 netsh interface ip set address name="以太网" dhcp
 
-# 设置 DNS 服务器
-netsh interface ip set dns name="以太网" static 8.8.8.8
-netsh interface ip add dns name="以太网" 8.8.4.4 index=2
-
-# 设置自动获取 DNS
-netsh interface ip set dns name="以太网" dhcp
-
-# 启用/禁用网络接口
+# 场景4：启用/禁用网络接口
 netsh interface set interface "以太网" enabled
 netsh interface set interface "以太网" disabled
 ```
 
-### 网络配置导出与导入
+### 常见网段配置示例
 
 ```cmd
-# 导出网络配置
-netsh -c interface dump > network_config.txt
+# 示例1：与 192.168.1.100 的设备通信
+netsh interface ip set address name="以太网" static 192.168.1.10 255.255.255.0
 
-# 导入网络配置
-netsh -f network_config.txt
+# 示例2：与 192.168.0.50 的设备通信
+netsh interface ip set address name="以太网" static 192.168.0.10 255.255.255.0
+
+# 示例3：与 10.0.0.100 的设备通信
+netsh interface ip set address name="以太网" static 10.0.0.10 255.255.255.0
+
+# 示例4：多个设备在不同网段（需要多块网卡或虚拟网卡）
+# 网卡1：连接 192.168.1.x 设备
+netsh interface ip set address name="以太网" static 192.168.1.10 255.255.255.0
+# 网卡2：连接 192.168.2.x 设备
+netsh interface ip set address name="以太网 2" static 192.168.2.10 255.255.255.0
 ```
 
-### 查看网络连接状态
+### DNS 配置（可选）
 
 ```cmd
-# 查看 TCP 连接
-netsh interface tcp show global
+# 设置 DNS 服务器（通常不需要，工控设备用 IP 通信）
+netsh interface ip set dns name="以太网" static 8.8.8.8
+netsh interface ip add dns name="以太网" 8.8.4.4 index=2
 
-# 查看所有网络配置
-netsh interface ip show config
-
-# 查看 DNS 缓存
-netsh interface ip show dnsservers
-
-# 查看 ARP 缓存
-netsh interface ip show neighbors
+# 恢复自动获取 DNS
+netsh interface ip set dns name="以太网" dhcp
 ```
 
-### WLAN 配置（无线网络）
-
-```cmd
-# 查看 WLAN 信息
-netsh wlan show interfaces
-
-# 查看保存的 WLAN 配置文件
-netsh wlan show profiles
-
-# 显示特定配置文件的详细信息（包括密码）
-netsh wlan show profile name="WiFi名称" key=clear
-
-# 连接到网络
-netsh wlan connect name="WiFi名称"
-
-# 断开连接
-netsh wlan disconnect
-
-# 删除配置文件
-netsh wlan delete profile name="WiFi名称"
-
-# 扫描可用网络
-netsh wlan show networks
-
-# 导出 WLAN 配置
-netsh wlan export profile folder=C:\WiFiBackup
-
-# 导入 WLAN 配置
-netsh wlan add profile filename="C:\WiFiBackup\profile.xml"
-```
-
-### 网络重置
+### 网络故障快速重置
 
 ```cmd
 # 重置 TCP/IP 栈
@@ -594,591 +569,450 @@ ipconfig /renew
 
 ---
 
-## Windows 防火墙
+## 防火墙快速配置
 
-### 防火墙基本管理
+Windows 防火墙可能阻止与工控设备的通信，需要配置相应规则。
+
+### 查看和关闭防火墙（临时调试）
 
 ```cmd
 # 查看防火墙状态
-netsh advfirewall show allprofiles
+netsh advfirewall show allprofiles state
 
-# 启用防火墙（所有配置文件）
-netsh advfirewall set allprofiles state on
-
-# 禁用防火墙（不推荐）
+# 临时关闭防火墙（仅用于调试，不推荐长期使用）
 netsh advfirewall set allprofiles state off
 
-# 启用特定配置文件的防火墙
-netsh advfirewall set domainprofile state on
-netsh advfirewall set privateprofile state on
-netsh advfirewall set publicprofile state on
+# 重新启用防火墙
+netsh advfirewall set allprofiles state on
 
-# 恢复默认防火墙设置
+# 恢复默认设置
 netsh advfirewall reset
 ```
 
-### 防火墙规则管理
+### 允许工控协议端口
 
 ```cmd
-# 查看所有防火墙规则
+# 允许 Modbus TCP（端口 502）
+netsh advfirewall firewall add rule name="Modbus TCP" dir=in action=allow protocol=TCP localport=502
+
+# 允许 EtherNet/IP（端口 44818）
+netsh advfirewall firewall add rule name="EtherNet/IP" dir=in action=allow protocol=TCP localport=44818
+
+# 允许 S7 协议（端口 102）
+netsh advfirewall firewall add rule name="S7" dir=in action=allow protocol=TCP localport=102
+
+# 允许 OPC UA（端口 4840）
+netsh advfirewall firewall add rule name="OPC UA" dir=in action=allow protocol=TCP localport=4840
+
+# 允许特定 IP 的所有通信（推荐）
+netsh advfirewall firewall add rule name="工控设备" dir=in action=allow remoteip=192.168.1.100
+
+# 允许整个网段的通信
+netsh advfirewall firewall add rule name="工控网段" dir=in action=allow remoteip=192.168.1.0/24
+```
+
+### 管理防火墙规则
+
+```cmd
+# 查看所有规则
 netsh advfirewall firewall show rule name=all
 
 # 查看特定规则
-netsh advfirewall firewall show rule name="远程桌面"
-
-# 允许特定端口（入站）
-netsh advfirewall firewall add rule name="允许 TCP 80" dir=in action=allow protocol=TCP localport=80
-
-# 允许特定端口（出站）
-netsh advfirewall firewall add rule name="允许 TCP 443" dir=out action=allow protocol=TCP localport=443
-
-# 允许特定程序
-netsh advfirewall firewall add rule name="允许 MyApp" dir=in action=allow program="C:\Program Files\MyApp\app.exe"
-
-# 允许特定 IP 地址
-netsh advfirewall firewall add rule name="允许特定IP" dir=in action=allow remoteip=192.168.1.100
-
-# 阻止特定端口
-netsh advfirewall firewall add rule name="阻止 TCP 445" dir=in action=block protocol=TCP localport=445
+netsh advfirewall firewall show rule name="Modbus TCP"
 
 # 删除规则
-netsh advfirewall firewall delete rule name="允许 TCP 80"
+netsh advfirewall firewall delete rule name="Modbus TCP"
 
 # 启用/禁用规则
-netsh advfirewall firewall set rule name="远程桌面" new enable=yes
-netsh advfirewall firewall set rule name="远程桌面" new enable=no
+netsh advfirewall firewall set rule name="Modbus TCP" new enable=yes
+netsh advfirewall firewall set rule name="Modbus TCP" new enable=no
 ```
 
-### 防火墙日志
+### 快速配置脚本
 
-```cmd
-# 启用防火墙日志
-netsh advfirewall set allprofiles logging filename %systemroot%\system32\LogFiles\Firewall\pfirewall.log
-netsh advfirewall set allprofiles logging maxfilesize 4096
-netsh advfirewall set allprofiles logging droppedconnections enable
-netsh advfirewall set allprofiles logging allowedconnections enable
+创建一个批处理文件 `firewall_setup.bat`（以管理员身份运行）：
 
-# 查看日志配置
-netsh advfirewall show allprofiles logging
+```batch
+@echo off
+echo 正在配置工控设备防火墙规则...
 
-# 查看日志文件
-type %systemroot%\system32\LogFiles\Firewall\pfirewall.log
+REM 允许常用工控协议端口
+netsh advfirewall firewall add rule name="Modbus TCP" dir=in action=allow protocol=TCP localport=502
+netsh advfirewall firewall add rule name="EtherNet/IP" dir=in action=allow protocol=TCP localport=44818
+netsh advfirewall firewall add rule name="S7" dir=in action=allow protocol=TCP localport=102
+netsh advfirewall firewall add rule name="OPC UA" dir=in action=allow protocol=TCP localport=4840
+netsh advfirewall firewall add rule name="PROFINET" dir=in action=allow protocol=TCP localport=34962-34964
+
+REM 允许工控网段
+netsh advfirewall firewall add rule name="工控网段" dir=in action=allow remoteip=192.168.1.0/24
+
+echo 防火墙规则配置完成！
+pause
 ```
 
 ---
 
-## PowerShell 网络命令
-
-PowerShell 提供了更强大和灵活的网络管理功能。
-
-### 基本网络诊断
-
-```powershell
-# 测试网络连接
-Test-Connection -ComputerName 192.168.1.1 -Count 4
-
-# 持续 ping
-Test-Connection -ComputerName 192.168.1.1 -Continuous
-
-# 测试端口连通性
-Test-NetConnection -ComputerName 192.168.1.1 -Port 80
-
-# 路由跟踪
-Test-NetConnection -ComputerName www.baidu.com -TraceRoute
-
-# DNS 解析
-Resolve-DnsName www.baidu.com
-Resolve-DnsName -Name www.baidu.com -Type A
-Resolve-DnsName -Name baidu.com -Type MX
-
-# 清除 DNS 缓存
-Clear-DnsClientCache
-
-# 查看 DNS 缓存
-Get-DnsClientCache
-```
-
-### 网络适配器管理
-
-```powershell
-# 查看所有网络适配器
-Get-NetAdapter
-
-# 查看启用的适配器
-Get-NetAdapter | Where-Object {$_.Status -eq "Up"}
-
-# 查看适配器详细信息
-Get-NetAdapter -Name "以太网" | Format-List *
-
-# 启用/禁用适配器
-Enable-NetAdapter -Name "以太网"
-Disable-NetAdapter -Name "以太网"
-
-# 重启适配器
-Restart-NetAdapter -Name "以太网"
-
-# 查看适配器统计
-Get-NetAdapterStatistics
-```
-
-### IP 配置管理
-
-```powershell
-# 查看 IP 配置
-Get-NetIPConfiguration
-
-# 查看详细 IP 配置
-Get-NetIPConfiguration -Detailed
-
-# 查看特定适配器的 IP
-Get-NetIPAddress -InterfaceAlias "以太网"
-
-# 设置静态 IP
-New-NetIPAddress -InterfaceAlias "以太网" -IPAddress 192.168.1.100 -PrefixLength 24 -DefaultGateway 192.168.1.1
-
-# 删除 IP 地址
-Remove-NetIPAddress -InterfaceAlias "以太网" -IPAddress 192.168.1.100
-
-# 设置 DNS 服务器
-Set-DnsClientServerAddress -InterfaceAlias "以太网" -ServerAddresses ("8.8.8.8","8.8.4.4")
-
-# 设置 DHCP
-Set-NetIPInterface -InterfaceAlias "以太网" -Dhcp Enabled
-```
-
-### 路由管理
-
-```powershell
-# 查看路由表
-Get-NetRoute
-
-# 查看默认路由
-Get-NetRoute -DestinationPrefix "0.0.0.0/0"
-
-# 添加静态路由
-New-NetRoute -DestinationPrefix "10.0.0.0/8" -InterfaceAlias "以太网" -NextHop 192.168.1.1
-
-# 删除路由
-Remove-NetRoute -DestinationPrefix "10.0.0.0/8"
-```
-
-### 防火墙管理
-
-```powershell
-# 查看防火墙状态
-Get-NetFirewallProfile
-
-# 启用防火墙
-Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True
-
-# 禁用防火墙
-Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
-
-# 查看防火墙规则
-Get-NetFirewallRule
-
-# 查看特定规则
-Get-NetFirewallRule -DisplayName "远程桌面*"
-
-# 创建防火墙规则
-New-NetFirewallRule -DisplayName "允许 TCP 80" -Direction Inbound -Protocol TCP -LocalPort 80 -Action Allow
-
-# 删除规则
-Remove-NetFirewallRule -DisplayName "允许 TCP 80"
-
-# 启用/禁用规则
-Enable-NetFirewallRule -DisplayName "远程桌面*"
-Disable-NetFirewallRule -DisplayName "远程桌面*"
-```
-
-### 网络连接查看
-
-```powershell
-# 查看 TCP 连接
-Get-NetTCPConnection
-
-# 查看监听端口
-Get-NetTCPConnection -State Listen
-
-# 查看已建立的连接
-Get-NetTCPConnection -State Established
-
-# 查看特定端口
-Get-NetTCPConnection -LocalPort 80
-
-# 查看连接及对应进程
-Get-NetTCPConnection | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,State,@{Name="Process";Expression={(Get-Process -Id $_.OwningProcess).ProcessName}}
-
-# 查看 UDP 端点
-Get-NetUDPEndpoint
-```
-
----
-
-## 网络抓包工具
-
-### 使用 netsh trace
-
-Windows 内置的网络抓包工具。
-
-```cmd
-# 开始抓包
-netsh trace start capture=yes tracefile=C:\capture.etl
-
-# 开始抓包（指定网络适配器）
-netsh trace start capture=yes tracefile=C:\capture.etl captureinterface="以太网"
-
-# 抓取特定 IP 的流量
-netsh trace start capture=yes tracefile=C:\capture.etl IPv4.Address=192.168.1.100
-
-# 停止抓包
-netsh trace stop
-
-# 查看支持的场景
-netsh trace show scenarios
-
-# 使用特定场景抓包
-netsh trace start scenario=InternetClient capture=yes tracefile=C:\capture.etl
-
-# 转换 ETL 文件（使用 Microsoft Message Analyzer 或 Wireshark）
-# 可以使用 etl2pcapng 工具转换为 pcapng 格式
-```
-
-### 使用 pktmon（Windows 10 1809+）
-
-```cmd
-# 列出所有网络组件
-pktmon comp list
-
-# 开始抓包
-pktmon start --etw
-
-# 抓包到文件
-pktmon start --etw -f pktmon.etl
-
-# 添加过滤器（特定 IP）
-pktmon filter add -i 192.168.1.100
-
-# 添加过滤器（特定端口）
-pktmon filter add -p 80
-
-# 列出过滤器
-pktmon filter list
-
-# 停止抓包
-pktmon stop
-
-# 查看统计信息
-pktmon counters
-
-# 重置计数器
-pktmon reset
-
-# 转换为 pcapng 格式（可用 Wireshark 打开）
-pktmon etl2txt pktmon.etl
-pktmon pcapng pktmon.etl -o pktmon.pcapng
-
-# 实时显示抓包
-pktmon start -c
-```
+## 网络抓包分析
 
 ### Wireshark
 
-Windows 下最强大的抓包工具（需要单独安装）。
+Windows 下最强大的网络抓包工具（需要单独安装）。
 
 **安装方法：**
 1. 下载 Wireshark: https://www.wireshark.org/download.html
 2. 安装时确保安装 Npcap 或 WinPcap
 
-**常用过滤器：**
+**基本使用：**
+
+1. 选择网络接口开始抓包
+2. 使用过滤器筛选感兴趣的流量
+3. 停止抓包并分析数据
+4. 保存为 `.pcapng` 格式方便后续分析
+
+**常用显示过滤器：**
 
 ```
-# IP 过滤
-ip.addr == 192.168.1.100
-ip.src == 192.168.1.100
-ip.dst == 192.168.1.100
+# IP 地址过滤
+ip.addr == 192.168.1.100          # 包含此 IP 的所有流量
+ip.src == 192.168.1.100           # 源 IP
+ip.dst == 192.168.1.100           # 目标 IP
+ip.addr == 192.168.1.0/24         # 整个网段
 
 # 端口过滤
-tcp.port == 80
-udp.port == 53
+tcp.port == 80                    # TCP 端口 80
+tcp.port == 80 || tcp.port == 443 # 80 或 443 端口
+tcp.dstport == 3389               # 目标端口 3389
+tcp.srcport == 1234               # 源端口 1234
+udp.port == 53                    # UDP 端口 53
 
 # 协议过滤
-http
-dns
-icmp
-arp
+http                              # HTTP 协议
+https                             # HTTPS/TLS 协议
+dns                               # DNS 协议
+icmp                              # ICMP 协议
+arp                               # ARP 协议
+tcp                               # 所有 TCP 流量
+udp                               # 所有 UDP 流量
+
+# TCP 标志过滤
+tcp.flags.syn == 1                # SYN 包
+tcp.flags.syn == 1 && tcp.flags.ack == 0  # SYN 包（三次握手第一步）
+tcp.flags.reset == 1              # RST 包
+tcp.flags.fin == 1                # FIN 包
+
+# HTTP 详细过滤
+http.request.method == "GET"      # GET 请求
+http.request.method == "POST"     # POST 请求
+http.host contains "baidu"        # 主机名包含 baidu
+http.request.uri contains "api"   # URI 包含 api
+http.response.code == 200         # HTTP 200 响应
+http.response.code >= 400         # HTTP 错误（4xx/5xx）
+
+# DNS 过滤
+dns.qry.name contains "google"    # DNS 查询包含 google
+dns.flags.response == 1           # DNS 响应
 
 # 组合过滤
 ip.addr == 192.168.1.100 && tcp.port == 80
-tcp.flags.syn == 1 && tcp.flags.ack == 0
+ip.src == 192.168.1.100 && http
+tcp.port == 443 && ip.addr == 8.8.8.8
 
-# HTTP 过滤
-http.request.method == "GET"
-http.host contains "baidu"
+# 排除过滤
+!arp                              # 排除 ARP
+!(ip.addr == 192.168.1.1)         # 排除特定 IP
+tcp.port != 22                    # 排除 SSH 流量
+
+# 包长度过滤
+frame.len > 1000                  # 大于 1000 字节的包
+tcp.len > 0                       # 有数据的 TCP 包（非 ACK）
+
+# 时间过滤
+frame.time >= "2024-01-01 00:00:00"
+```
+
+**实用技巧：**
+
+```
+# 追踪 TCP 流
+右键数据包 → Follow → TCP Stream
+
+# 查看统计信息
+Statistics → Protocol Hierarchy    # 协议层次统计
+Statistics → Conversations         # 会话统计
+Statistics → Endpoints             # 端点统计
+Statistics → IO Graph              # 流量图表
+
+# 导出对象
+File → Export Objects → HTTP       # 导出 HTTP 对象（如图片、文件）
+
+# 抓包过滤（Capture Filter，BPF 语法）
+host 192.168.1.100                 # 只抓特定主机
+port 80                            # 只抓 80 端口
+tcp port 80 or tcp port 443        # 抓 80 或 443 端口
+not arp and not icmp               # 排除 ARP 和 ICMP
 ```
 
 ---
 
-## 网络故障排查流程
+## 局域网故障排查
 
-### 🔍 系统化排查步骤
+### 🔍 工控设备连接排查流程
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│              Windows 网络故障排查流程                     │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  1. 检查网络适配器状态                                    │
-│     └── 设备管理器、网络连接、指示灯                       │
-│              ↓                                          │
-│  2. 检查 IP 配置                                         │
-│     └── ipconfig /all                                   │
-│              ↓                                          │
-│  3. 测试本地回环                                         │
-│     └── ping 127.0.0.1                                  │
-│              ↓                                          │
-│  4. 测试网关连通性                                       │
-│     └── ping 网关地址                                    │
-│              ↓                                          │
-│  5. 测试外网连通性                                       │
-│     └── ping 8.8.8.8                                    │
-│              ↓                                          │
-│  6. 测试 DNS 解析                                        │
-│     └── nslookup www.baidu.com                          │
-│              ↓                                          │
-│  7. 检查路由                                            │
-│     └── tracert / pathping                              │
-│              ↓                                          │
-│  8. 检查防火墙                                          │
-│     └── netsh advfirewall show currentprofile           │
-│              ↓                                          │
-│  9. 检查端口和服务                                       │
-│     └── netstat -ano                                    │
-│              ↓                                          │
-│  10. 网络重置（最后手段）                                │
-│      └── netsh int ip reset + netsh winsock reset      │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────┐
+│          工控设备局域网连接故障排查流程                      │
+├───────────────────────────────────────────────────────────┤
+│                                                           │
+│  1. 检查物理连接                                           │
+│     └── 网线、指示灯、设备电源                              │
+│              ↓                                            │
+│  2. 检查 PC 的 IP 配置                                     │
+│     └── ipconfig                                          │
+│     └── 确认与设备在同一网段                               │
+│              ↓                                            │
+│  3. 测试设备连通性                                         │
+│     └── ping 设备IP                                       │
+│              ↓                                            │
+│  4. 检查 ARP 表（确认 MAC 地址）                           │
+│     └── arp -a | findstr "设备IP"                         │
+│     └── 检测 IP 冲突                                       │
+│              ↓                                            │
+│  5. 测试设备端口                                          │
+│     └── telnet 设备IP 端口                                │
+│     └── netstat -an | findstr "设备IP"                    │
+│              ↓                                            │
+│  6. 检查防火墙                                            │
+│     └── netsh advfirewall show allprofiles state          │
+│     └── 临时关闭测试：netsh advfirewall set allprofiles state off │
+│              ↓                                            │
+│  7. 使用 Wireshark 抓包分析                               │
+│     └── 查看是否有数据包交互                               │
+│              ↓                                            │
+│  8. 网络重置（最后手段）                                   │
+│     └── netsh int ip reset                                │
+│     └── netsh winsock reset                               │
+│                                                           │
+└───────────────────────────────────────────────────────────┘
 ```
 
 ### 📋 常见问题快速诊断
 
 | 问题现象 | 快速检查命令 | 可能原因 | 解决方案 |
 |---------|-------------|---------|---------|
-| 无法上网 | `ipconfig /all`<br>`ping 网关` | IP 配置错误<br>网线未连接 | 重新配置 IP<br>检查物理连接 |
-| DNS 解析失败 | `nslookup www.baidu.com`<br>`ipconfig /flushdns` | DNS 服务器问题<br>DNS 缓存损坏 | 更换 DNS<br>清除缓存 |
-| 网络时通时断 | `pathping 8.8.8.8`<br>`netsh int ip show config` | IP 冲突<br>网卡驱动问题 | 更换 IP<br>更新驱动 |
-| 无法访问特定网站 | `tracert 目标地址`<br>`telnet IP 端口` | 路由问题<br>防火墙阻止 | 检查路由<br>调整防火墙 |
-| 端口被占用 | `netstat -ano | findstr :端口`<br>`tasklist | findstr PID` | 程序冲突 | 结束进程 |
-| 远程桌面连接失败 | `Test-NetConnection IP -Port 3389` | RDP 服务未启动<br>防火墙阻止 | 启动服务<br>开放端口 |
+| ping 不通设备 | `ipconfig`<br>`ping 设备IP` | 不在同一网段<br>网线故障<br>设备未开机 | 修改 IP 配置<br>检查物理连接<br>检查设备电源 |
+| IP 冲突 | `arp -a \| findstr "设备IP"`<br>`arp -d *` | 多个设备使用同一 IP | 修改设备或其他主机 IP<br>清除 ARP 缓存 |
+| 端口连接失败 | `telnet 设备IP 端口`<br>`netstat -an` | 设备端口未开放<br>防火墙阻止 | 检查设备配置<br>关闭防火墙测试 |
+| 网段不匹配 | `ipconfig`<br>`ping 设备IP` | PC 与设备不在同一网段 | 修改 PC 或设备 IP 配置 |
+| MAC 地址不匹配 | `arp -a \| findstr "设备IP"`<br>`getmac` | IP 被其他设备占用 | 检查网络内所有设备<br>修改 IP 地址 |
+| 通信协议错误 | Wireshark 抓包<br>`netstat -an` | 协议端口错误<br>协议配置错误 | 确认正确的协议端口<br>检查协议参数 |
 
-### 🛠️ 一键诊断脚本
+### 🛠️ 工控设备诊断脚本
 
-#### 批处理脚本 (.bat)
+保存以下脚本为 `device_check.bat`（以管理员身份运行）：
 
 ```batch
 @echo off
+chcp 65001 >nul
 echo ========================================
-echo Windows 网络诊断脚本
+echo 工控设备局域网连接诊断
 echo ========================================
 echo.
 
-echo [1] 网络适配器状态
-echo ----------------------------------------
-ipconfig | findstr /C:"适配器" /C:"IPv4" /C:"默认网关"
+REM 设置设备 IP（根据实际情况修改）
+set DEVICE_IP=192.168.1.100
+set DEVICE_PORT=502
+
+echo 目标设备: %DEVICE_IP%
+echo 目标端口: %DEVICE_PORT%
+echo ========================================
 echo.
 
-echo [2] DNS 配置
+echo [1] PC 网络配置
 echo ----------------------------------------
-ipconfig /all | findstr /C:"DNS 服务器"
+ipconfig | findstr /C:"IPv4" /C:"子网掩码"
 echo.
 
-echo [3] 测试本地回环
+echo [2] 测试设备连通性
 echo ----------------------------------------
-ping -n 2 127.0.0.1
+ping -n 4 %DEVICE_IP%
 echo.
 
-echo [4] 测试网关
+echo [3] ARP 表（检查 MAC 地址）
 echo ----------------------------------------
-for /f "tokens=3" %%i in ('route print ^| findstr "\<0.0.0.0\>"') do set gateway=%%i
-ping -n 2 %gateway%
+arp -a | findstr "%DEVICE_IP%"
+if errorlevel 1 (
+    echo 未找到 ARP 条目，设备可能不在线
+) else (
+    echo 设备 MAC 地址已记录
+)
 echo.
 
-echo [5] 测试外网
+echo [4] 与设备的连接状态
 echo ----------------------------------------
-ping -n 2 8.8.8.8
+netstat -an | findstr "%DEVICE_IP%"
+if errorlevel 1 (
+    echo 无活动连接
+) else (
+    echo 存在活动连接
+)
 echo.
 
-echo [6] DNS 解析测试
+echo [5] 本地监听端口
 echo ----------------------------------------
-nslookup www.baidu.com
+netstat -an | findstr "LISTENING" | findstr "%DEVICE_PORT%"
+if errorlevel 1 (
+    echo 端口 %DEVICE_PORT% 未监听
+) else (
+    echo 端口 %DEVICE_PORT% 正在监听
+)
 echo.
 
-echo [7] 路由表
+echo [6] 防火墙状态
 echo ----------------------------------------
-route print -4 | findstr "0.0.0.0"
+netsh advfirewall show allprofiles state | findstr "State"
 echo.
 
-echo [8] 活动连接
+echo [7] 设备网段扫描
 echo ----------------------------------------
-netstat -an | findstr "ESTABLISHED"
-echo.
-
-echo [9] 监听端口
-echo ----------------------------------------
-netstat -an | findstr "LISTENING"
+echo 正在扫描 192.168.1.0/24 网段（需要1-2分钟）...
+for /L %%i in (1,1,254) do (
+    ping -n 1 -w 100 192.168.1.%%i >nul 2>&1
+    if not errorlevel 1 echo   192.168.1.%%i 在线
+)
 echo.
 
 echo ========================================
 echo 诊断完成
 echo ========================================
+echo.
+echo 建议：
+echo 1. 如果 ping 不通，检查 IP 配置和物理连接
+echo 2. 如果 ARP 表无记录，检查设备是否开机
+echo 3. 如果端口无连接，使用 telnet 测试端口
+echo 4. 如果防火墙开启，临时关闭测试
+echo.
 pause
 ```
 
-#### PowerShell 脚本 (.ps1)
+### 快速配置 PC 网络脚本
 
-```powershell
-# network_diagnostic.ps1
-Write-Host "========================================"
-Write-Host "Windows 网络诊断脚本"
-Write-Host "========================================"
-Write-Host ""
+保存以下脚本为 `set_ip.bat`（以管理员身份运行）：
 
-Write-Host "[1] 网络适配器状态" -ForegroundColor Cyan
-Write-Host "----------------------------------------"
-Get-NetAdapter | Format-Table Name, Status, LinkSpeed, MacAddress
-Write-Host ""
+```batch
+@echo off
+chcp 65001 >nul
+echo ========================================
+echo 配置 PC 网络以连接工控设备
+echo ========================================
+echo.
 
-Write-Host "[2] IP 配置" -ForegroundColor Cyan
-Write-Host "----------------------------------------"
-Get-NetIPConfiguration | Format-Table InterfaceAlias, IPv4Address, IPv4DefaultGateway
-Write-Host ""
+REM 显示当前网卡
+echo 当前网络适配器：
+netsh interface show interface
+echo.
 
-Write-Host "[3] DNS 服务器" -ForegroundColor Cyan
-Write-Host "----------------------------------------"
-Get-DnsClientServerAddress -AddressFamily IPv4 | Format-Table InterfaceAlias, ServerAddresses
-Write-Host ""
+REM 设置目标网卡名称（根据实际情况修改）
+set ADAPTER_NAME=以太网
 
-Write-Host "[4] 测试连通性" -ForegroundColor Cyan
-Write-Host "----------------------------------------"
-Write-Host "本地回环:"
-Test-Connection -ComputerName 127.0.0.1 -Count 2 -Quiet
-Write-Host "网关:"
-$gateway = (Get-NetRoute -DestinationPrefix "0.0.0.0/0").NextHop
-Test-Connection -ComputerName $gateway -Count 2 -Quiet
-Write-Host "外网:"
-Test-Connection -ComputerName 8.8.8.8 -Count 2 -Quiet
-Write-Host ""
+echo 请选择配置方案：
+echo 1. 192.168.1.x 网段（设备 IP: 192.168.1.100）
+echo 2. 192.168.0.x 网段（设备 IP: 192.168.0.100）
+echo 3. 10.0.0.x 网段（设备 IP: 10.0.0.100）
+echo 4. 自定义
+echo 5. 恢复 DHCP
+echo.
 
-Write-Host "[5] DNS 解析测试" -ForegroundColor Cyan
-Write-Host "----------------------------------------"
-Resolve-DnsName www.baidu.com -Type A | Select-Object Name, IPAddress
-Write-Host ""
+set /p choice=请输入选项 (1-5): 
 
-Write-Host "[6] 活动 TCP 连接" -ForegroundColor Cyan
-Write-Host "----------------------------------------"
-Get-NetTCPConnection -State Established | Select-Object LocalAddress, LocalPort, RemoteAddress, RemotePort, State -First 10
-Write-Host ""
+if "%choice%"=="1" (
+    netsh interface ip set address name="%ADAPTER_NAME%" static 192.168.1.10 255.255.255.0
+    echo 已配置: 192.168.1.10 / 255.255.255.0
+)
 
-Write-Host "[7] 监听端口" -ForegroundColor Cyan
-Write-Host "----------------------------------------"
-Get-NetTCPConnection -State Listen | Select-Object LocalAddress, LocalPort, State -First 10
-Write-Host ""
+if "%choice%"=="2" (
+    netsh interface ip set address name="%ADAPTER_NAME%" static 192.168.0.10 255.255.255.0
+    echo 已配置: 192.168.0.10 / 255.255.255.0
+)
 
-Write-Host "========================================" -ForegroundColor Green
-Write-Host "诊断完成"
-Write-Host "========================================" -ForegroundColor Green
+if "%choice%"=="3" (
+    netsh interface ip set address name="%ADAPTER_NAME%" static 10.0.0.10 255.255.255.0
+    echo 已配置: 10.0.0.10 / 255.255.255.0
+)
+
+if "%choice%"=="4" (
+    set /p custom_ip=请输入 PC IP 地址: 
+    set /p custom_mask=请输入子网掩码 (默认 255.255.255.0): 
+    if "%custom_mask%"=="" set custom_mask=255.255.255.0
+    netsh interface ip set address name="%ADAPTER_NAME%" static %custom_ip% %custom_mask%
+    echo 已配置: %custom_ip% / %custom_mask%
+)
+
+if "%choice%"=="5" (
+    netsh interface ip set address name="%ADAPTER_NAME%" dhcp
+    echo 已恢复 DHCP 自动获取
+)
+
+echo.
+echo 当前 IP 配置：
+ipconfig | findstr /C:"IPv4" /C:"子网掩码"
+echo.
+pause
 ```
 
-### 网络重置完整步骤
+### 常见故障快速解决方案
 
-当常规方法无法解决问题时，可以尝试完全重置网络配置：
+#### 问题1：ping 不通设备
 
 ```cmd
-:: 以管理员身份运行命令提示符
+REM 步骤1：检查 PC 和设备是否在同一网段
+ipconfig
 
-:: 1. 重置 TCP/IP 栈
-netsh int ip reset resetlog.txt
+REM 步骤2：清除 ARP 缓存后重试
+arp -d *
+ping 192.168.1.100
 
-:: 2. 重置 Winsock 目录
-netsh winsock reset
-
-:: 3. 刷新 DNS 缓存
-ipconfig /flushdns
-
-:: 4. 释放并重新获取 IP
-ipconfig /release
-ipconfig /renew
-
-:: 5. 重置防火墙（可选）
-netsh advfirewall reset
-
-:: 6. 重置代理设置
-netsh winhttp reset proxy
-
-:: 7. 重启计算机
-shutdown /r /t 0
+REM 步骤3：临时关闭防火墙测试
+netsh advfirewall set allprofiles state off
+ping 192.168.1.100
+netsh advfirewall set allprofiles state on
 ```
 
-PowerShell 版本：
+#### 问题2：IP 冲突
 
-```powershell
-# 以管理员身份运行 PowerShell
+```cmd
+REM 步骤1：查看 ARP 表中的 MAC 地址
+arp -a | findstr "192.168.1.100"
 
-# 重置网络配置
+REM 步骤2：清除 ARP 缓存
+arp -d *
+
+REM 步骤3：修改 PC 或设备的 IP 地址
+netsh interface ip set address name="以太网" static 192.168.1.10 255.255.255.0
+```
+
+#### 问题3：端口连接失败
+
+```cmd
+REM 步骤1：测试端口是否开放
+telnet 192.168.1.100 502
+
+REM 步骤2：检查防火墙是否阻止
+netsh advfirewall firewall add rule name="Modbus TCP" dir=in action=allow protocol=TCP localport=502
+
+REM 步骤3：检查是否有程序占用端口
+netstat -ano | findstr :502
+```
+
+#### 问题4：网络配置错误
+
+```cmd
+REM 完全重置网络配置（以管理员身份运行）
 netsh int ip reset
 netsh winsock reset
-Clear-DnsClientCache
-ipconfig /release
-ipconfig /renew
-
-# 重置网络适配器
-Get-NetAdapter | Restart-NetAdapter
-
-# 重启计算机
-Restart-Computer
+ipconfig /flushdns
+shutdown /r /t 10
 ```
 
 ---
 
-## 高级技巧与工具
-
-### 网络性能测试
-
-```cmd
-# 使用 PowerShell 测试下载速度
-powershell -Command "& {$ProgressPreference = 'SilentlyContinue'; Measure-Command {Invoke-WebRequest -Uri 'http://speedtest.com/test.jpg' -OutFile 'test.jpg'}}"
-
-# 查看网络适配器速度
-wmic nic where netEnabled=true get name, speed
-```
-
-### 远程网络诊断
-
-```cmd
-# 查看远程主机的 MAC 地址（需要在同一网段）
-arp -a 192.168.1.100
-
-# 远程主机信息（需要相应权限）
-systeminfo /s 远程主机名
-```
-
-### 网络监控
-
-```powershell
-# 实时监控网络流量
-Get-NetAdapterStatistics | Select-Object Name, ReceivedBytes, SentBytes
-
-# 循环监控
-while ($true) {
-    Clear-Host
-    Get-NetAdapterStatistics | Format-Table Name, ReceivedBytes, SentBytes
-    Start-Sleep -Seconds 1
-}
-```
-
----
-
-<p align="center">
-  <a href="README_zh.md">返回主页</a>
-</p>
+[返回主页](README_zh.md)
